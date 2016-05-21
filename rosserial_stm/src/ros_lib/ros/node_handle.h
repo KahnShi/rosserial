@@ -68,6 +68,8 @@
 
 #define MSG_TIMEOUT 20  //20 milliseconds to recieve all of message data
 
+#define NEW_VERSION 1 //use new ros protocol version
+
 #include "msg.h"
 
 namespace ros {
@@ -105,12 +107,18 @@ namespace ros {
 
     /* used for computing current time */
     uint32_t sec_offset, nsec_offset;
-
+	
     uint8_t message_in[INPUT_SIZE];
     uint8_t message_out[OUTPUT_SIZE];
 
     Publisher * publishers[MAX_PUBLISHERS];
     Subscriber_ * subscribers[MAX_SUBSCRIBERS];
+
+#if NEW_VERSION
+    bool negotiate_topics_mode_;
+    uint8_t pub_num_, sub_num_;
+    uint8_t negotiate_pub_no_, negotiate_sub_no_;
+#endif
 
     /*
      * Setup Functions
@@ -136,6 +144,14 @@ namespace ros {
       req_param_resp.floats = NULL;
       req_param_resp.ints_length = 0;
       req_param_resp.ints = NULL;
+
+#if NEW_VERSION
+      negotiate_topics_mode_ = false;
+      pub_num_ = 0;
+      sub_num_ = 0;
+      negotiate_pub_no_ = 0;
+      negotiate_sub_no_ = 0;
+#endif
     }
 
     Hardware* getHardware(){
@@ -244,7 +260,13 @@ namespace ros {
             if( (checksum_%256) == 255){
               if(topic_ == TopicInfo::ID_PUBLISHER){
                 requestSyncTime();
+#if NEW_VERSION
+                negotiate_topics_mode_ = true;
+                negotiate_pub_no_ = 0;
+                negotiate_sub_no_ = 0;
+#else
                 negotiateTopics();
+#endif
                 last_sync_time = c_time;
                 last_sync_receive_time = c_time;
                 return -1;
@@ -271,6 +293,46 @@ namespace ros {
         //debug
         last_sync_receive_time = c_time;
       }
+
+#if NEW_VERSION
+      /* negotiate topics mode */
+      if(negotiate_topics_mode_)
+        {
+      rosserial_msgs::TopicInfo ti;
+
+          /* send publisher info first */
+          if(negotiate_pub_no_ < pub_num_)
+            {
+              ti.topic_id = publishers[negotiate_pub_no_]->id_;
+              ti.topic_name = (char *) publishers[negotiate_pub_no_]->topic_;
+              ti.message_type = (char *) publishers[negotiate_pub_no_]->msg_->getType();
+              ti.md5sum = (char *) publishers[negotiate_pub_no_]->msg_->getMD5();
+              ti.buffer_size = OUTPUT_SIZE;
+              publish( publishers[negotiate_pub_no_]->getEndpointType(), &ti );
+              negotiate_pub_no_++;
+            }
+          else
+            {
+              /* finish sending topics info */
+              if(negotiate_sub_no_ == sub_num_)
+                {
+                  negotiate_topics_mode_ = false;
+                  configured_ = true;
+                  return 0;
+                }
+
+              /* send subscriber info after publisher */
+              ti.topic_id = subscribers[negotiate_sub_no_]->id_;
+              ti.topic_name = (char *) subscribers[negotiate_sub_no_]->topic_;
+              ti.message_type = (char *) subscribers[negotiate_sub_no_]->getMsgType();
+              ti.md5sum = (char *) subscribers[negotiate_sub_no_]->getMsgMD5();
+              ti.buffer_size = INPUT_SIZE;
+              publish( subscribers[negotiate_sub_no_]->getEndpointType(), &ti );
+              negotiate_sub_no_++;
+            }
+        }
+#endif
+
 
       return 0;
     }
@@ -330,6 +392,16 @@ namespace ros {
     /* Register a new publisher */
     bool advertise(Publisher & p)
     {
+#if NEW_VERSION
+      if(pub_num_ == MAX_PUBLISHERS) return false;
+
+      publishers[pub_num_] = &p;
+      p.id_ = pub_num_ + 100 + MAX_SUBSCRIBERS;
+      p.nh_ = this;
+      pub_num_ ++;
+      return true;
+
+#else
       for(int i = 0; i < MAX_PUBLISHERS; i++){
         if(publishers[i] == 0){ // empty slot
           publishers[i] = &p;
@@ -339,11 +411,20 @@ namespace ros {
         }
       }
       return false;
+#endif
     }
 
     /* Register a new subscriber */
     template<typename MsgT>
     bool subscribe(Subscriber< MsgT> & s){
+#if NEW_VERSION
+      if(sub_num_ == MAX_SUBSCRIBERS) return false;
+
+      subscribers[sub_num_] = (Subscriber_*) &s;
+      s.id_ = sub_num_ + 100;
+      sub_num_ ++;
+      return true;
+#else
       for(int i = 0; i < MAX_SUBSCRIBERS; i++){
         if(subscribers[i] == 0){ // empty slot
           subscribers[i] = (Subscriber_*) &s;
@@ -352,10 +433,19 @@ namespace ros {
         }
       }
       return false;
+#endif
     }
     /* Register a new subscriber, which is a member of class*/
     template<typename MsgT, class T>
     bool subscribe(Subscriber2< MsgT, T> & s){
+#if NEW_VERSION
+      if(sub_num_ == MAX_SUBSCRIBERS) return false;
+
+      subscribers[sub_num_] = (Subscriber_*) &s;
+      s.id_ = sub_num_ + 100;
+      sub_num_ ++;
+      return true;
+#else
       for(int i = 0; i < MAX_SUBSCRIBERS; i++){
         if(subscribers[i] == 0){ // empty slot
           subscribers[i] = (Subscriber_*) &s;
@@ -364,6 +454,7 @@ namespace ros {
         }
       }
       return false;
+#endif
     }
 
     /* Register a new Service Server */
