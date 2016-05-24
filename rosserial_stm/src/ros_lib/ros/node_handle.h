@@ -68,6 +68,9 @@
 
 #define MSG_TIMEOUT 20  //20 milliseconds to recieve all of message data
 
+#define NEW_VERSION 0 //use new ros protocol version
+#define NEGOTIATE_INTERVAL 2000 // 1s
+
 #include "msg.h"
 
 namespace ros {
@@ -105,12 +108,17 @@ namespace ros {
 
     /* used for computing current time */
     uint32_t sec_offset, nsec_offset;
-
+	
     uint8_t message_in[INPUT_SIZE];
     uint8_t message_out[OUTPUT_SIZE];
 
     Publisher * publishers[MAX_PUBLISHERS];
     Subscriber_ * subscribers[MAX_SUBSCRIBERS];
+
+#if NEW_VERSION
+    bool negotiate_topics_mode_;
+    uint32_t last_negotiate_time_;
+#endif
 
     /*
      * Setup Functions
@@ -136,6 +144,11 @@ namespace ros {
       req_param_resp.floats = NULL;
       req_param_resp.ints_length = 0;
       req_param_resp.ints = NULL;
+
+#if NEW_VERSION
+      negotiate_topics_mode_ = false;
+      last_negotiate_time_ = 0;
+#endif
     }
 
     Hardware* getHardware(){
@@ -244,7 +257,12 @@ namespace ros {
             if( (checksum_%256) == 255){
               if(topic_ == TopicInfo::ID_PUBLISHER){
                 requestSyncTime();
+#if NEW_VERSION
+                negotiate_topics_mode_ = true;
+                last_negotiate_time_ = c_time;
+#endif
                 negotiateTopics();
+
                 last_sync_time = c_time;
                 last_sync_receive_time = c_time;
                 return -1;
@@ -269,8 +287,22 @@ namespace ros {
         last_sync_time = c_time;
 
         //debug
-        last_sync_receive_time = c_time;
+        //last_sync_receive_time = c_time;
       }
+
+#if NEW_VERSION
+      /* negotiate topics mode */
+      if(negotiate_topics_mode_)
+        {
+				if(c_time - last_negotiate_time_ > NEGOTIATE_INTERVAL)
+{
+      negotiate_topics_mode_ = false;
+      configured_ = true;
+
+}
+        }
+#endif
+
 
       return 0;
     }
@@ -339,6 +371,7 @@ namespace ros {
         }
       }
       return false;
+
     }
 
     /* Register a new subscriber */
@@ -422,7 +455,10 @@ namespace ros {
               publish( subscribers[i]->getEndpointType(), &ti );
             }
         }
+
+#if !NEW_VERSION
       configured_ = true;
+#endif
     }
 
     virtual int publish(int id, const Msg * msg)
